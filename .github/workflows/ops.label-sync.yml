@@ -1,0 +1,21 @@
+name: Sync Labels
+
+on:
+  push:
+    branches: [main]
+    paths: [".github/labels.yml"]
+  workflow_dispatch: {} # run manually any time to re-sync
+
+permissions:
+  issues: write # labels API lives under Issues
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: crazy-max/ghaction-github-labeler@v5
+        with:
+          yaml-file: .github/labels.yml
+          skip-delete: true # never delete labels not listed here — safety first
+          dry-run: false
