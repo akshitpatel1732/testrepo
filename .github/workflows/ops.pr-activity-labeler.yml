@@ -3,7 +3,17 @@ name: PR Activity Labeler
 on:
   schedule:
     - cron: "0 3 * * *" # daily at 03:00 UTC — adjust to your timezone/preference
-  workflow_dispatch: {} # manual "Run workflow" button — also serves as backfill for all open PRs
+  workflow_dispatch: # manual "Run workflow" button — also serves as backfill for all open PRs
+    inputs:
+      stale_after_days:
+        description: "Override: days until 'stale' (default 7). For testing — leave blank normally."
+        required: false
+      needs_decision_after_days:
+        description: "Override: days until 'needs-decision' (default 10). For testing — leave blank normally."
+        required: false
+      final_notice_after_days:
+        description: "Override: days until 'final-notice' (default 14). For testing — leave blank normally."
+        required: false
 
 permissions:
   pull-requests: write
@@ -13,6 +23,10 @@ permissions:
 jobs:
   activity-scan:
     runs-on: ubuntu-latest
+    env:
+      STALE_AFTER_DAYS: ${{ inputs.stale_after_days }}
+      NEEDS_DECISION_AFTER_DAYS: ${{ inputs.needs_decision_after_days }}
+      FINAL_NOTICE_AFTER_DAYS: ${{ inputs.final_notice_after_days }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/github-script@v9

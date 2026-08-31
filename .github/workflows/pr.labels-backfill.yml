@@ -16,12 +16,12 @@ jobs:
   list-open-prs:
     runs-on: ubuntu-latest
     outputs:
-      pr-numbers: ${{ steps.list.outputs.result }}
+      json: ${{ steps.list.outputs.json }} # e.g. [3,2,1] — for embedding into JS array literals
+      lines: ${{ steps.list.outputs.lines }} # e.g. "3\n2\n1" with REAL newlines — for actions/labeler's pr-number input
     steps:
       - id: list
         uses: actions/github-script@v9
         with:
-          result-encoding: json
           script: |
             const prs = await github.paginate(github.rest.pulls.list, {
               owner: context.repo.owner,
@@ -29,21 +29,23 @@ jobs:
               state: "open",
               per_page: 100,
             });
-            return prs.map((p) => p.number);
+            const numbers = prs.map((p) => p.number);
+            // core.setOutput writes real newline characters correctly via
+            // the GITHUB_OUTPUT heredoc format — a YAML/expression '\n'
+            // string literal does NOT produce a real newline, which is
+            // what caused the "not a valid pull request number" warning.
+            core.setOutput("json", JSON.stringify(numbers));
+            core.setOutput("lines", numbers.join("\n"));
 
   area-labels-backfill:
     needs: list-open-prs
-    if: needs.list-open-prs.outputs.pr-numbers != '[]'
+    if: needs.list-open-prs.outputs.json != '[]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/labeler@v7
         with:
           configuration-path: .github/labeler.yml
-          # pr-number expects a newline-delimited list ("1\n2\n3"), not a
-          # JSON array — join() converts the JSON output from list-open-prs
-          # into that format. Passing the raw JSON string here is what
-          # produced the "not a valid pull request number" warning.
-          pr-number: ${{ join(fromJSON(needs.list-open-prs.outputs.pr-numbers), '\n') }}
+          pr-number: ${{ needs.list-open-prs.outputs.lines }}
           sync-labels: true
 
   metadata-labels-backfill:
@@ -56,7 +58,7 @@ jobs:
           script: |
             const { labelOne } = require('${{ github.workspace }}/.github/scripts/pr-metadata-labeler.js');
             const { owner, repo } = context.repo;
-            const prNumbers = ${{ needs.list-open-prs.outputs.pr-numbers }};
+            const prNumbers = ${{ needs.list-open-prs.outputs.json }};
 
             for (const pr_number of prNumbers) {
               const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: pr_number });

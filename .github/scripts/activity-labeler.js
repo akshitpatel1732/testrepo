@@ -23,6 +23,20 @@ const TIER_LABELS = ["stale", "needs-decision", "final-notice"];
 const EXEMPT_LABELS = ["abandoned", "needs-adoption", "has-conflicts", "wontfix"];
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
+// Overridable via env for testing (e.g. set to fractional-day values so a
+// test run can observe real tier transitions in seconds instead of days).
+// Unset -> real production values. See TESTING.md for how the test harness
+// uses this.
+function envDays(name, fallback) {
+  const v = process.env[name];
+  if (v === undefined || v === "") return fallback;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+const DAYS_STALE = envDays("STALE_AFTER_DAYS", 7);
+const DAYS_NEEDS_DECISION = envDays("NEEDS_DECISION_AFTER_DAYS", 10);
+const DAYS_FINAL_NOTICE = envDays("FINAL_NOTICE_AFTER_DAYS", 14);
+
 module.exports = async ({ github, context, core }) => {
   const { owner, repo } = context.repo;
   const permissionCache = new Map();
@@ -139,9 +153,9 @@ module.exports = async ({ github, context, core }) => {
     let targetLabel = null;
     if (clockStart) {
       const days = (Date.now() - new Date(clockStart).getTime()) / MS_PER_DAY;
-      if (days >= 14) targetLabel = "final-notice";
-      else if (days >= 10) targetLabel = "needs-decision";
-      else if (days >= 7) targetLabel = "stale";
+      if (days >= DAYS_FINAL_NOTICE) targetLabel = "final-notice";
+      else if (days >= DAYS_NEEDS_DECISION) targetLabel = "needs-decision";
+      else if (days >= DAYS_STALE) targetLabel = "stale";
     }
 
     core.info(`#${pr_number}: clockStart=${clockStart} -> ${targetLabel ?? "none"}`);
