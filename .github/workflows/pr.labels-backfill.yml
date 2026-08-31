@@ -39,7 +39,11 @@ jobs:
       - uses: actions/labeler@v7
         with:
           configuration-path: .github/labeler.yml
-          pr-number: ${{ needs.list-open-prs.outputs.pr-numbers }}
+          # pr-number expects a newline-delimited list ("1\n2\n3"), not a
+          # JSON array — join() converts the JSON output from list-open-prs
+          # into that format. Passing the raw JSON string here is what
+          # produced the "not a valid pull request number" warning.
+          pr-number: ${{ join(fromJSON(needs.list-open-prs.outputs.pr-numbers), '\n') }}
           sync-labels: true
 
   metadata-labels-backfill:
