@@ -96,17 +96,21 @@ module.exports = async ({ github, context, core }) => {
       if (login && time) events.push({ login, time });
     }
 
-    // PR creation itself counts as an initial author event.
-    events.push({ login: pr.user?.login, time: pr.created_at });
-
     events.sort((a, b) => new Date(a.time) - new Date(b.time));
 
+    const authorLogin = pr.user?.login;
     let clockStart = null;
     let anyMaintainerEver = false;
 
     for (const ev of events) {
       if (isBot(ev.login)) continue;
-      const maintainer = await isMaintainer(ev.login);
+      // The PR's own author never counts as "a maintainer engaged with
+      // this" — even if that author happens to hold write/admin
+      // permission on the repo (e.g. the repo owner opening their own
+      // test PR, or a collaborator pushing their own commits). Only a
+      // *different* person with write/admin permission starts the clock.
+      const isSelf = ev.login === authorLogin;
+      const maintainer = !isSelf && (await isMaintainer(ev.login));
       if (maintainer) {
         anyMaintainerEver = true;
         clockStart = ev.time; // maintainer activity (re)starts the clock
