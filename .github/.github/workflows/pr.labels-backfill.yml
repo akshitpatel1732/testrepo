@@ -1,0 +1,57 @@
+name: Backfill Area & Size Labels (existing open PRs)
+
+# Manual only — run this once after installing the system, and again any
+# time you want to force a re-check on all currently-open PRs.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  list-open-prs:
+    runs-on: ubuntu-latest
+    outputs:
+      pr-numbers: ${{ steps.list.outputs.result }}
+    steps:
+      - id: list
+        uses: actions/github-script@v9
+        with:
+          result-encoding: json
+          script: |
+            const prs = await github.paginate(github.rest.pulls.list, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              per_page: 100,
+            });
+            return prs.map((p) => p.number);
+
+  area-labels-backfill:
+    needs: list-open-prs
+    if: needs.list-open-prs.outputs.pr-numbers != '[]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/labeler@v7
+        with:
+          configuration-path: .github/labeler.yml
+          pr-number: ${{ needs.list-open-prs.outputs.pr-numbers }}
+          sync-labels: true
+
+  metadata-labels-backfill:
+    needs: [list-open-prs, area-labels-backfill]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/github-script@v9
+        with:
+          script: |
+            const { labelOne } = require('${{ github.workspace }}/.github/scripts/pr-metadata-labeler.js');
+            const { owner, repo } = context.repo;
+            const prNumbers = ${{ needs.list-open-prs.outputs.pr-numbers }};
+
+            for (const pr_number of prNumbers) {
+              const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: pr_number });
+              await labelOne({ github, owner, repo, pr });
+            }

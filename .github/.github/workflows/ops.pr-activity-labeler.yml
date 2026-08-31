@@ -1,0 +1,21 @@
+name: PR Activity Labeler
+
+on:
+  schedule:
+    - cron: "0 3 * * *" # daily at 03:00 UTC — adjust to your timezone/preference
+  workflow_dispatch: {} # manual "Run workflow" button — also serves as backfill for all open PRs
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  activity-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/github-script@v9
+        with:
+          script: |
+            const run = require('${{ github.workspace }}/.github/scripts/activity-labeler.js');
+            await run({ github, context, core });
