@@ -12,6 +12,7 @@ on:
 
 permissions:
   pull-requests: write
+  issues: write # labels/labels-list live under the Issues API even for PRs
   contents: read
 
 jobs:
