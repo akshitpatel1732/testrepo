@@ -16,7 +16,7 @@ jobs:
       pr-numbers: ${{ steps.list.outputs.result }}
     steps:
       - id: list
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           result-encoding: json
           script: |
@@ -33,7 +33,7 @@ jobs:
     if: needs.list-open-prs.outputs.pr-numbers != '[]'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/labeler@v5
+      - uses: actions/labeler@v7
         with:
           configuration-path: .github/labeler.yml
           pr-number: ${{ needs.list-open-prs.outputs.pr-numbers }}
@@ -43,8 +43,8 @@ jobs:
     needs: [list-open-prs, area-labels-backfill]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/github-script@v7
+      - uses: actions/checkout@v7
+      - uses: actions/github-script@v9
         with:
           script: |
             const { labelOne } = require('${{ github.workspace }}/.github/scripts/pr-metadata-labeler.js');
