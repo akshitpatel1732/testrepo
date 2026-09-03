@@ -19,7 +19,7 @@
 //   >= 7   -> stale          (remove needs-decision, final-notice)
 //   <  7   -> no tier label  (remove all three if present)
 
-const TIER_LABELS = ["stale", "needs-decision", "final-notice"];
+const { TIER_LABELS } = require("./label-taxonomy.js");
 const EXEMPT_LABELS = ["abandoned", "needs-adoption", "has-conflicts", "wontfix"];
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 

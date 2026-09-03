@@ -15,13 +15,17 @@ Every PR gets area labels (`area: backend-api`, `area: docs`, etc.) the moment i
   labeler.yml                    # path -> area-label rules (edit this to add/change area mappings)
   labels.yml                     # full label catalog: names, colors, descriptions (source of truth — see ops.label-sync.yml)
   scripts/
+    label-taxonomy.js            # single source of truth for which labels are automated vs. manual-only
+    pr-range-parser.js           # printer-style PR range parsing ("1,5,7-9"), used by the reset tool
     activity-labeler.js          # the 7/10/14-day activity clock
     pr-metadata-labeler.js       # area:multi / size/* / first-contribution (shared by two workflows below)
+    pr-labels-reset.js           # bulk-clears managed labels from chosen PRs (the reset tool)
   workflows/
     pr.area-labeler.yml          # runs on every PR open/push: area + size + first-contribution
     ops.pr-activity-labeler.yml  # nightly cron + manual: stale/needs-decision/final-notice/needs-triage
     pr.labels-backfill.yml       # manual, one-shot: applies every label type to all currently-open PRs
     ops.label-sync.yml           # on push to labels.yml, or manual: creates/updates labels from the catalog
+    ops.pr-labels-reset.yml      # manual "clean slate" tool: bulk-clears managed labels from chosen PRs
 
 tools/pr-labeler/
   README.md                      # this file
@@ -39,6 +43,23 @@ tools/pr-labeler/
 3. Run **Actions → Backfill All PR Labels → Run workflow** once. This applies every label type — area, size, multi, first-contribution, and activity status — to every PR that was already open before this system existed.
 
 From there it's automatic: new/updated PRs get area and size labels within seconds, and a nightly scan keeps activity status current on everything else.
+
+## Recovering from a bad state: PR Labels Reset
+
+**Actions → PR Labels Reset → Run workflow.** A manual "clean slate" tool for clearing automatically-managed labels from a chosen set of PRs — useful after a bad test run, a config bug, or any other case where the automation left labels somewhere they shouldn't be. It only ever touches labels this system can apply on its own (`area:*`, `size/*`, `first-contribution`, `docker`, `github_actions`, and the four activity tier labels — the exact list lives in `.github/scripts/label-taxonomy.js`). Manually-curated labels like `abandoned`, `needs-adoption`, `has-conflicts`, or `wontfix` are never touched, since those always reflect a human decision this tool has no business undoing.
+
+**Inputs:**
+
+| Input | Purpose |
+|---|---|
+| `pr_numbers` | Printer-style ranges, e.g. `1,5,7-9` — same syntax as a print dialog's page range |
+| `all_open_prs` | Check this to target every currently open PR instead of listing numbers |
+| `open_only` | Skip any listed PR that isn't currently open (default on) |
+| `only_labels` | Optional — restrict to specific labels/prefixes (e.g. `stale,needs-decision,final-notice` to clear just the tier labels, or `area: ` to clear just area labels). Leave blank to reset everything managed |
+| `dry_run` | **Defaults to on.** Logs exactly what would be removed without changing anything — always run this first |
+| `confirm` | Must be typed as exactly `RESET` to allow a real (non-dry-run) run to proceed |
+
+The two safety gates — dry-run-by-default, plus the typed confirmation for real runs — exist because this is the one tool in the whole system whose entire purpose is bulk-removing labels across many PRs at once, where a mistake is the most annoying to walk back by hand. Always run with `dry_run` on first, read the job summary it produces, and only then re-run with `dry_run` off and `confirm: RESET`.
 
 ## Label reference
 
@@ -69,6 +90,7 @@ Labels like `abandoned`, `needs-adoption`, `has-conflicts`, and `wontfix` stay f
 
 ## Extending
 
+- **Add a new automated label**: add it to `MANAGED_EXACT_LABELS` (or use the existing `area:`/`size/` prefixes) in `.github/scripts/label-taxonomy.js` — this is what the reset tool uses to know what it's allowed to touch, so anything added elsewhere that isn't listed here won't be clearable in bulk later.
 - **New top-level folder needs its own area label**: add one block to `.github/labeler.yml` mirroring the existing ones. Until you do, files in an unrecognized folder simply won't get an area label (nothing crashes, it's just a labeling gap worth watching for as the repo evolves).
 - **Change the day thresholds**: edit the three default values in `.github/scripts/activity-labeler.js`.
 - **Change the cron schedule**: edit the `cron:` line in `ops.pr-activity-labeler.yml`.

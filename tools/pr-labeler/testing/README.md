@@ -37,6 +37,7 @@ Each test creates its own branch (`test-labeler/<test>-<timestamp>`) and an open
 | `triage` | Opens a PR, runs the activity scan, then comments as the author | `needs-triage` appears, then **persists** through the self-comment |
 | `draft` | Opens a **draft** PR | No activity labels applied at all |
 | `exempt` | Adds a manual "no automated action" label, forces the clock to near-zero thresholds | Tier labels stay off despite the time condition being met |
+| `reset` | Adds a manual label alongside automated ones, runs the reset tool in dry-run then for real | Dry run changes nothing; real run clears managed labels but preserves the manual one |
 | `sync` | Temporarily adds a throwaway label to the catalog file, syncs, checks it exists, then reverts | Confirms the sync workflow can still create labels (a useful regression check after any permissions change) |
 
 ### Tests that need a second account

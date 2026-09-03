@@ -340,6 +340,40 @@ test_tier_progression_fast() {
   git checkout "$BASE_BRANCH" --quiet
 }
 
+test_reset_tool() {
+  log "TEST: PR Labels Reset clears managed labels but never manual ones"
+  local branch; branch=$(new_branch "reset")
+  mkdir -p backend-api
+  echo "test $(date +%s)" >> backend-api/_test-reset.txt
+  git add -A && git commit -m "test: reset tool" --quiet
+  local before; before=$(latest_run_id "pr.area-labeler.yml" "$branch")
+  local pr; pr=$(open_pr "$branch" "test: reset tool")
+  record_pr "$pr"
+  wait_for_new_completed_run "pr.area-labeler.yml" "$branch" "$before"
+
+  # Add a genuinely manual label alongside the automated ones
+  gh pr edit "$pr" --add-label "question"
+
+  run_dispatch_and_wait "ops.pr-labels-reset.yml" -f pr_numbers="$pr" -f dry_run=true
+  if has_label "$pr" "area: backend-api" && has_label "$pr" "question"; then
+    pass "dry run left all labels untouched"
+  else
+    fail "dry run changed labels — it should never do that"
+  fi
+
+  run_dispatch_and_wait "ops.pr-labels-reset.yml" -f pr_numbers="$pr" -f dry_run=false -f confirm=RESET
+  local remaining; remaining=$(pr_labels "$pr" | tr '\n' ' ')
+  echo "  labels after real reset: $remaining"
+  if has_label "$pr" "area: backend-api" || has_label "$pr" "size/XS"; then
+    fail "managed labels still present after a confirmed reset"
+  elif ! has_label "$pr" "question"; then
+    fail "manual label 'question' was incorrectly removed"
+  else
+    pass "managed labels cleared, manual label preserved"
+  fi
+  git checkout "$BASE_BRANCH" --quiet
+}
+
 test_sync_regression() {
   log "TEST: label sync still works (regression check for the permissions bug)"
   local test_label="test-sync-$(date +%s)"
@@ -390,6 +424,7 @@ list_tests() {
   echo "  draft                   - draft PRs get no activity labels"
   echo "  exempt                  - has-conflicts blocks tier labels"
   echo "  tier-fast               - forced tier progression via tiny thresholds"
+  echo "  reset                   - reset tool clears managed labels, preserves manual ones"
   echo "  sync                    - label sync regression check"
   echo "  all                     - run everything above"
   echo "  verify-triage-cleared N - re-check PR #N after an outside comment"
@@ -409,13 +444,14 @@ main() {
     draft) require_clean_tree; test_draft_immunity ;;
     exempt) require_clean_tree; test_exempt_label_stops_clock ;;
     tier-fast) require_clean_tree; test_tier_progression_fast ;;
+    reset) require_clean_tree; test_reset_tool ;;
     sync) require_clean_tree; test_sync_regression ;;
     verify-triage-cleared) verify_triage_cleared "${2:?PR number required}" ;;
     all)
       require_clean_tree
       test_area; test_multi_and_shrink; test_root_catchall; test_docker_label
       test_size_shrink; test_size_xl_by_filecount; test_triage_and_response
-      test_draft_immunity; test_exempt_label_stops_clock; test_sync_regression
+      test_draft_immunity; test_exempt_label_stops_clock; test_reset_tool; test_sync_regression
       echo
       echo "tier-fast and verify-triage-cleared need manual interaction — run them separately."
       ;;

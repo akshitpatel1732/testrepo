@@ -2,6 +2,8 @@
 // (manual, loops all open PRs) — one source of truth for area:multi,
 // size/*, and first-contribution so the two workflows can't drift apart.
 //
+const { AREA_PREFIX, SIZE_PREFIX } = require("./label-taxonomy.js");
+
 // Size tiers are deliberately aligned with ops/pr.size-warning.yml's
 // warning condition (total lines > 500 OR files changed > 30): size/XL
 // fires on exactly that condition, so a PR the size-warning workflow
@@ -12,11 +14,11 @@ const SIZE_WARNING_LINES = 500;
 const SIZE_WARNING_FILES = 30;
 
 function sizeTier(totalLines, filesChanged) {
-  if (totalLines > SIZE_WARNING_LINES || filesChanged > SIZE_WARNING_FILES) return "size/XL";
-  if (totalLines >= 250) return "size/L";
-  if (totalLines >= 100) return "size/M";
-  if (totalLines >= 10) return "size/S";
-  return "size/XS";
+  if (totalLines > SIZE_WARNING_LINES || filesChanged > SIZE_WARNING_FILES) return `${SIZE_PREFIX}XL`;
+  if (totalLines >= 250) return `${SIZE_PREFIX}L`;
+  if (totalLines >= 100) return `${SIZE_PREFIX}M`;
+  if (totalLines >= 10) return `${SIZE_PREFIX}S`;
+  return `${SIZE_PREFIX}XS`;
 }
 
 async function labelOne({ github, owner, repo, pr }) {
@@ -25,7 +27,7 @@ async function labelOne({ github, owner, repo, pr }) {
   const labelNames = current.labels.map((l) => l.name);
 
   // --- area: multi rollup ---
-  const areaLabels = labelNames.filter((n) => n.startsWith("area: ") && n !== "area: multi");
+  const areaLabels = labelNames.filter((n) => n.startsWith(AREA_PREFIX) && n !== "area: multi");
   const hasMulti = labelNames.includes("area: multi");
   if (areaLabels.length > 1 && !hasMulti) {
     await github.rest.issues.addLabels({ owner, repo, issue_number: pr_number, labels: ["area: multi"] });
@@ -36,7 +38,7 @@ async function labelOne({ github, owner, repo, pr }) {
   // --- size/* — recalculated every call, so it moves down as well as up ---
   const total = pr.additions + pr.deletions;
   const size = sizeTier(total, pr.changed_files || 0);
-  const existingSize = labelNames.find((n) => n.startsWith("size/"));
+  const existingSize = labelNames.find((n) => n.startsWith(SIZE_PREFIX));
   if (existingSize !== size) {
     if (existingSize) {
       await github.rest.issues.removeLabel({ owner, repo, issue_number: pr_number, name: existingSize }).catch(() => {});
