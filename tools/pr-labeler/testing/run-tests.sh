@@ -22,7 +22,14 @@ set -euo pipefail
 # is possible but never blocks the script).
 export GIT_ASK_YESNO=false
 
-STATE_FILE=".test-state"
+# Location-independent: works whether invoked as
+# `./tools/pr-labeler/testing/run-tests.sh` from the repo root, or as
+# `./run-tests.sh` after cd-ing into this directory.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+STATE_FILE="$SCRIPT_DIR/.test-state"
 BASE_BRANCH="main"
 POLL_INTERVAL=5
 POLL_TIMEOUT=180 # seconds to wait for a workflow run to finish
@@ -77,17 +84,21 @@ latest_run_id() {
 
 wait_for_new_completed_run() {
   # Polls until a run ID *different* from $before appears for this
-  # workflow+branch AND has finished — not just "the latest run is
-  # completed", which can match a stale run from a previous push and read
-  # labels before the real new run has even started.
+  # workflow+branch AND has finished. Polls .status directly rather than
+  # using `gh run watch`, which can error out if invoked in the brief
+  # window before GitHub's API fully registers a just-created run —
+  # silently skipping the wait if that error isn't surfaced.
   # $1 = workflow file, $2 = branch filter (optional, "" for none), $3 = before-id
   local wf="$1" branch="$2" before="$3" elapsed=0
   log "Waiting for a new $wf run${branch:+ on $branch}..."
   while (( elapsed < POLL_TIMEOUT )); do
-    local id; id=$(latest_run_id "$wf" "$branch")
+    local id status
+    id=$(latest_run_id "$wf" "$branch")
     if [[ "$id" != "$before" && "$id" != "none" ]]; then
-      gh run watch "$id" --exit-status >/dev/null 2>&1 || true
-      return 0
+      status=$(gh run view "$id" --json status -q '.status' 2>/dev/null || echo "")
+      if [[ "$status" == "completed" ]]; then
+        return 0
+      fi
     fi
     sleep "$POLL_INTERVAL"
     elapsed=$((elapsed + POLL_INTERVAL))
@@ -332,8 +343,8 @@ test_tier_progression_fast() {
 test_sync_regression() {
   log "TEST: label sync still works (regression check for the permissions bug)"
   local test_label="test-sync-$(date +%s)"
-  cp .github/labels.yml .github/labels.yml.bak
-  cat >> .github/labels.yml <<EOF
+  cp "$REPO_ROOT/.github/labels.yml" "$REPO_ROOT/.github/labels.yml.bak"
+  cat >> "$REPO_ROOT/.github/labels.yml" <<EOF
 - name: "$test_label"
   color: "ffffff"
   description: "Temporary label created by run-tests.sh, safe to delete"
@@ -354,9 +365,9 @@ EOF
   echo "  Cleaning up: removing test label from labels.yml and the repo"
   echo "  (the label ITSELF stays until the explicit delete below — skip-delete"
   echo "  intentionally means removing an entry from labels.yml never auto-deletes"
-  echo "  the actual label, same protection that keeps 'accessibility' and other"
-  echo "  undocumented labels safe from being wiped by a sync run)"
-  mv .github/labels.yml.bak .github/labels.yml
+  echo "  the actual label, same protection that keeps other undocumented"
+  echo "  labels safe from being wiped by a sync run)"
+  mv "$REPO_ROOT/.github/labels.yml.bak" "$REPO_ROOT/.github/labels.yml"
   git add .github/labels.yml
   git commit -m "test: revert temporary sync-check label" --quiet
   git push origin HEAD:"$BASE_BRANCH" --quiet
