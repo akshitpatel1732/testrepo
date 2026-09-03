@@ -14,6 +14,9 @@ on:
       final_notice_after_days:
         description: "Override: days until 'final-notice' (default 14). For testing — leave blank normally."
         required: false
+      pr_number:
+        description: "Restrict this run to a single PR number. STRONGLY recommended whenever overriding thresholds above — without it, a threshold test run relabels every open PR in the repo, not just the one you're testing."
+        required: false
 
 permissions:
   pull-requests: write
@@ -27,6 +30,7 @@ jobs:
       STALE_AFTER_DAYS: ${{ inputs.stale_after_days }}
       NEEDS_DECISION_AFTER_DAYS: ${{ inputs.needs_decision_after_days }}
       FINAL_NOTICE_AFTER_DAYS: ${{ inputs.final_notice_after_days }}
+      ONLY_PR_NUMBER: ${{ inputs.pr_number }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/github-script@v9

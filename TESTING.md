@@ -59,7 +59,21 @@ Leave the inputs blank (or just don't pass `-f`) for real 7/10/14-day behavior �
 - **Fork PR behavior / `pull_request_target` semantics** — needs an actual external fork, not just a branch on the same repo; worth a manual one-off test if you ever expect outside contributors, but not part of the automated suite.
 - **Bot-authored comments not resetting the clock** — hard to simulate without a real bot (e.g. Dependabot) commenting; keep an eye on this the first time a bot actually does comment on a PR in the live repo.
 
-## After a test run
+## Notes from the first real test pass (things that look like failures but aren't)
+
+- **"No needs-triage applied" on `area`/`root`/`docker`/`size-*` tests** — expected. Those tests only exercise `pr.area-labeler.yml`, which never touches activity labels. `needs-triage` only appears after `ops.pr-activity-labeler.yml` runs (nightly cron, or manually/via `triage`/`tier-fast`/`exempt`, which do call it).
+- **`ops.label-sync.yml` logging `⛔️ Skipping delete for 'accessibility' (inputs.skipDelete on)`** — intentional. `skip-delete: true` protects every label not listed in `labels.yml` from deletion, including pre-existing ones like `accessibility`. This is the safety net working correctly, not an error.
+- **The revert commit in `sync` not removing the label from the repo** — also `skip-delete` working as intended: removing an entry from `labels.yml` never deletes the actual label; the test's own explicit `gh label delete` at the end is what actually removes it.
+
+## Windows-specific notes
+
+If you're running this from Git Bash / Git for Windows, `GIT_ASK_YESNO=false` is set at the top of the script to suppress an interactive "Deletion of directory 'X' failed. Should I try again?" prompt that Git for Windows can throw when the last file in a directory is removed — this would otherwise hang the script waiting for input that never comes non-interactively. If you ever see this prompt from a manual `git` command outside the script, answering `n` is safe; the file deletion itself still succeeds, only the (harmless) empty-directory cleanup fails.
+
+## Safety note on threshold overrides
+
+`ops.pr-activity-labeler.yml`'s threshold overrides (`stale_after_days` etc.) apply to **every open PR the scan touches**, not just one — because the underlying script always scans all open PRs in a single pass. A `pr_number` input scopes a run to a single PR, and `exempt`/`tier-fast` always pass it now. **Always include `pr_number` when overriding thresholds outside the test script**, or you risk relabeling unrelated real PRs with test thresholds — which is exactly what happened to a real PR during early testing here before this scoping existed.
+
+
 
 `gh pr view <PR#> --json labels` is the fastest way to eyeball exactly what got applied, e.g.:
 ```bash

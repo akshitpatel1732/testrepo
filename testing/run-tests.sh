@@ -15,6 +15,13 @@
 
 set -euo pipefail
 
+# Git for Windows can prompt interactively ("Deletion of directory 'X'
+# failed. Should I try again? (y/n)") when removing the last file in a
+# directory, which hangs a non-interactive script. This disables that
+# prompt; git proceeds without asking (a harmless leftover empty directory
+# is possible but never blocks the script).
+export GIT_ASK_YESNO=false
+
 STATE_FILE=".test-state"
 BASE_BRANCH="main"
 POLL_INTERVAL=5
@@ -58,40 +65,43 @@ has_label() {
   pr_labels "$1" | grep -qx "$2"
 }
 
-wait_for_area_labeler() {
-  # Polls until the "PR Area & Size Labeler" run for this PR's head branch finishes
-  local branch="$1" elapsed=0
-  log "Waiting for PR Area & Size Labeler to finish on $branch..."
+latest_run_id() {
+  # $1 = workflow file, $2 = branch filter (optional)
+  local wf="$1" branch="${2:-}"
+  if [[ -n "$branch" ]]; then
+    gh run list --workflow="$wf" --branch "$branch" --limit 1 --json databaseId -q '.[0].databaseId' 2>/dev/null || echo "none"
+  else
+    gh run list --workflow="$wf" --limit 1 --json databaseId -q '.[0].databaseId' 2>/dev/null || echo "none"
+  fi
+}
+
+wait_for_new_completed_run() {
+  # Polls until a run ID *different* from $before appears for this
+  # workflow+branch AND has finished — not just "the latest run is
+  # completed", which can match a stale run from a previous push and read
+  # labels before the real new run has even started.
+  # $1 = workflow file, $2 = branch filter (optional, "" for none), $3 = before-id
+  local wf="$1" branch="$2" before="$3" elapsed=0
+  log "Waiting for a new $wf run${branch:+ on $branch}..."
   while (( elapsed < POLL_TIMEOUT )); do
-    local status
-    status=$(gh run list --workflow=pr.area-labeler.yml --branch "$branch" --limit 1 --json status -q '.[0].status' 2>/dev/null || echo "")
-    if [[ "$status" == "completed" ]]; then
+    local id; id=$(latest_run_id "$wf" "$branch")
+    if [[ "$id" != "$before" && "$id" != "none" ]]; then
+      gh run watch "$id" --exit-status >/dev/null 2>&1 || true
       return 0
     fi
     sleep "$POLL_INTERVAL"
     elapsed=$((elapsed + POLL_INTERVAL))
   done
-  echo "  (timed out waiting — checking labels anyway, may be a false negative)"
+  echo "  (timed out waiting for a new completed run — checking labels anyway, may be a false negative)"
 }
 
 run_dispatch_and_wait() {
-  # Triggers a workflow_dispatch and waits for that specific run to finish.
+  # Triggers a workflow_dispatch and waits for that specific new run to finish.
   # $1 = workflow file, remaining args = -f key=value pairs
   local workflow="$1"; shift
-  local before
-  before=$(gh run list --workflow="$workflow" --limit 1 --json databaseId -q '.[0].databaseId' 2>/dev/null || echo "0")
+  local before; before=$(latest_run_id "$workflow")
   gh workflow run "$workflow" "$@"
-  local elapsed=0 run_id=""
-  while (( elapsed < POLL_TIMEOUT )); do
-    run_id=$(gh run list --workflow="$workflow" --limit 1 --json databaseId -q '.[0].databaseId' 2>/dev/null || echo "0")
-    if [[ "$run_id" != "$before" && "$run_id" != "0" ]]; then
-      gh run watch "$run_id" --exit-status >/dev/null 2>&1 || true
-      return 0
-    fi
-    sleep "$POLL_INTERVAL"
-    elapsed=$((elapsed + POLL_INTERVAL))
-  done
-  echo "  (timed out waiting for $workflow to start/finish)"
+  wait_for_new_completed_run "$workflow" "" "$before"
 }
 
 # ---------- tests ----------
@@ -102,9 +112,10 @@ test_area() {
   mkdir -p backend-api
   echo "// test $(date +%s)" >> backend-api/_test-touch.txt
   git add -A && git commit -m "test: touch backend-api" --quiet
+  local before; before=$(latest_run_id "pr.area-labeler.yml" "$branch")
   local pr; pr=$(open_pr "$branch" "test: area label (backend-api)")
   record_pr "$pr"
-  wait_for_area_labeler "$branch"
+  wait_for_new_completed_run "pr.area-labeler.yml" "$branch" "$before"
   has_label "$pr" "area: backend-api" && pass "area: backend-api applied" || fail "area: backend-api missing"
   git checkout "$BASE_BRANCH" --quiet
 }
@@ -116,15 +127,19 @@ test_multi_and_shrink() {
   echo "// test $(date +%s)" >> backend-api/_test-touch.txt
   echo "// test $(date +%s)" >> frontend/_test-touch.txt
   git add -A && git commit -m "test: touch backend-api + frontend" --quiet
+  local before1; before1=$(latest_run_id "pr.area-labeler.yml" "$branch")
   local pr; pr=$(open_pr "$branch" "test: area:multi")
   record_pr "$pr"
-  wait_for_area_labeler "$branch"
+  wait_for_new_completed_run "pr.area-labeler.yml" "$branch" "$before1"
   has_label "$pr" "area: multi" && pass "area: multi applied for 2 areas" || fail "area: multi missing"
 
-  git rm -q frontend/_test-touch.txt
+  rm -f frontend/_test-touch.txt
+  rmdir frontend 2>/dev/null || true
+  git add -A
   git commit -m "test: drop frontend change" --quiet
+  local before2; before2=$(latest_run_id "pr.area-labeler.yml" "$branch")
   git push --quiet
-  wait_for_area_labeler "$branch"
+  wait_for_new_completed_run "pr.area-labeler.yml" "$branch" "$before2"
   has_label "$pr" "area: multi" && fail "area: multi still present after shrinking to 1 area" || pass "area: multi correctly removed"
   git checkout "$BASE_BRANCH" --quiet
 }
@@ -134,9 +149,10 @@ test_root_catchall() {
   local branch; branch=$(new_branch "root")
   echo "test $(date +%s)" >> _test-root-file.txt
   git add -A && git commit -m "test: touch root file" --quiet
+  local before; before=$(latest_run_id "pr.area-labeler.yml" "$branch")
   local pr; pr=$(open_pr "$branch" "test: area: root")
   record_pr "$pr"
-  wait_for_area_labeler "$branch"
+  wait_for_new_completed_run "pr.area-labeler.yml" "$branch" "$before"
   has_label "$pr" "area: root" && pass "area: root applied" || fail "area: root missing"
   git checkout "$BASE_BRANCH" --quiet
 }
@@ -149,9 +165,10 @@ test_docker_label() {
 FROM scratch
 EOF
   git add -A && git commit -m "test: touch Dockerfile" --quiet
+  local before; before=$(latest_run_id "pr.area-labeler.yml" "$branch")
   local pr; pr=$(open_pr "$branch" "test: docker label")
   record_pr "$pr"
-  wait_for_area_labeler "$branch"
+  wait_for_new_completed_run "pr.area-labeler.yml" "$branch" "$before"
   has_label "$pr" "docker" && pass "docker label applied" || fail "docker label missing"
   git checkout "$BASE_BRANCH" --quiet
 }
@@ -160,20 +177,22 @@ test_size_shrink() {
   log "TEST: size label moves down when the diff shrinks"
   local branch; branch=$(new_branch "size-shrink")
   mkdir -p tools
-  # ~300 lines -> should land in size/M or size/L
+  # ~300 lines -> should land in size/L (>=250)
   seq 1 300 | sed 's/^/line /' > tools/_test-big-file.txt
   git add -A && git commit -m "test: large addition" --quiet
+  local before1; before1=$(latest_run_id "pr.area-labeler.yml" "$branch")
   local pr; pr=$(open_pr "$branch" "test: size shrink")
   record_pr "$pr"
-  wait_for_area_labeler "$branch"
+  wait_for_new_completed_run "pr.area-labeler.yml" "$branch" "$before1"
   local before; before=$(pr_labels "$pr" | grep '^size/' || echo "none")
   echo "  size before shrink: $before"
 
   # shrink to ~5 lines -> should land in size/XS
   seq 1 5 | sed 's/^/line /' > tools/_test-big-file.txt
   git add -A && git commit -m "test: shrink file" --quiet
+  local before2; before2=$(latest_run_id "pr.area-labeler.yml" "$branch")
   git push --quiet
-  wait_for_area_labeler "$branch"
+  wait_for_new_completed_run "pr.area-labeler.yml" "$branch" "$before2"
   local after; after=$(pr_labels "$pr" | grep '^size/' || echo "none")
   echo "  size after shrink: $after"
   if [[ "$after" == "size/XS" && "$before" != "size/XS" ]]; then
@@ -192,9 +211,10 @@ test_size_xl_by_filecount() {
     echo "x" > "tools/_test-many/file-$i.txt"
   done
   git add -A && git commit -m "test: 35 tiny files" --quiet
+  local before; before=$(latest_run_id "pr.area-labeler.yml" "$branch")
   local pr; pr=$(open_pr "$branch" "test: size/XL by file count")
   record_pr "$pr"
-  wait_for_area_labeler "$branch"
+  wait_for_new_completed_run "pr.area-labeler.yml" "$branch" "$before"
   has_label "$pr" "size/XL" && pass "size/XL applied for >30 files" || fail "size/XL missing for >30-file PR"
   git checkout "$BASE_BRANCH" --quiet
 }
@@ -248,7 +268,7 @@ test_draft_immunity() {
 }
 
 test_exempt_label_stops_clock() {
-  log "TEST: has-conflicts exempts a PR from tier labels even with a tiny threshold"
+  log "TEST: has-conflicts exempts a PR from tier labels even with a near-zero threshold"
   local branch; branch=$(new_branch "exempt")
   mkdir -p docs
   echo "test $(date +%s)" >> docs/_test-exempt.txt
@@ -256,10 +276,18 @@ test_exempt_label_stops_clock() {
   local pr; pr=$(open_pr "$branch" "test: exempt label stops clock")
   record_pr "$pr"
 
-  gh pr comment "$pr" --body "maintainer comment to start the clock"
+  echo "  This test needs a REAL maintainer comment from a DIFFERENT account"
+  echo "  than the one running this script — a comment from your own account"
+  echo "  is a self-comment and never starts the clock (see the 'triage' test),"
+  echo "  so this test can't validate the exemption without it."
+  echo "  Comment on PR #$pr now from a different collaborator/maintainer account."
+  read -r -p "  Press enter once that comment is posted... " _
+
   gh pr edit "$pr" --add-label "has-conflicts"
-  # threshold of 0 days would tier-label almost anything with a started clock
-  run_dispatch_and_wait "ops.pr-activity-labeler.yml" -f stale_after_days=0 -f needs_decision_after_days=0 -f final_notice_after_days=0
+  # near-zero thresholds + pr_number scoping so this ONLY affects this PR,
+  # never any other open PR in the repo (see ONLY_PR_NUMBER in activity-labeler.js)
+  run_dispatch_and_wait "ops.pr-activity-labeler.yml" \
+    -f stale_after_days=0 -f needs_decision_after_days=0 -f final_notice_after_days=0 -f pr_number="$pr"
   if has_label "$pr" "stale" || has_label "$pr" "needs-decision" || has_label "$pr" "final-notice"; then
     fail "tier label applied despite has-conflicts exemption"
   else
@@ -287,7 +315,8 @@ test_tier_progression_fast() {
   echo "  If you have a second maintainer account, comment on PR #$pr now, then press enter."
   read -r -p "  Press enter to continue once ready (or just press enter to test the no-clock-started path)... " _
 
-  run_dispatch_and_wait "ops.pr-activity-labeler.yml" -f stale_after_days=0.0001 -f needs_decision_after_days=0.0002 -f final_notice_after_days=0.0003
+  run_dispatch_and_wait "ops.pr-activity-labeler.yml" \
+    -f stale_after_days=0.0001 -f needs_decision_after_days=0.0002 -f final_notice_after_days=0.0003 -f pr_number="$pr"
   local labels; labels=$(pr_labels "$pr" | tr '\n' ' ')
   echo "  labels after forced-fast run: $labels"
   if echo "$labels" | grep -q "final-notice"; then
@@ -311,14 +340,22 @@ test_sync_regression() {
 EOF
   git add .github/labels.yml
   git commit -m "test: temporary sync-check label" --quiet
+  # ops.label-sync.yml already triggers on push to labels.yml — don't also
+  # dispatch it manually, that created two near-simultaneous runs racing
+  # each other and made the before/after run-ID check unreliable.
+  local before; before=$(latest_run_id "ops.label-sync.yml" "$BASE_BRANCH")
   git push origin HEAD:"$BASE_BRANCH" --quiet
-  run_dispatch_and_wait "ops.label-sync.yml"
+  wait_for_new_completed_run "ops.label-sync.yml" "$BASE_BRANCH" "$before"
   if gh label list --json name -q '.[].name' | grep -qx "$test_label"; then
     pass "label sync created the test label successfully"
   else
     fail "label sync did not create the test label — check the workflow run log"
   fi
   echo "  Cleaning up: removing test label from labels.yml and the repo"
+  echo "  (the label ITSELF stays until the explicit delete below — skip-delete"
+  echo "  intentionally means removing an entry from labels.yml never auto-deletes"
+  echo "  the actual label, same protection that keeps 'accessibility' and other"
+  echo "  undocumented labels safe from being wiped by a sync run)"
   mv .github/labels.yml.bak .github/labels.yml
   git add .github/labels.yml
   git commit -m "test: revert temporary sync-check label" --quiet

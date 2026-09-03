@@ -63,13 +63,19 @@ module.exports = async ({ github, context, core }) => {
     return !login || login.endsWith("[bot]");
   }
 
-  const prs = await github.paginate(github.rest.pulls.list, {
+  const prsAll = await github.paginate(github.rest.pulls.list, {
     owner,
     repo,
     state: "open",
     per_page: 100,
   });
 
+  const only = process.env.ONLY_PR_NUMBER ? Number(process.env.ONLY_PR_NUMBER) : null;
+  const prs = only ? prsAll.filter((p) => p.number === only) : prsAll;
+
+  if (only) {
+    core.info(`ONLY_PR_NUMBER set — restricting this run to PR #${only} only`);
+  }
   core.info(`Scanning ${prs.length} open PRs`);
 
   for (const pr of prs) {
