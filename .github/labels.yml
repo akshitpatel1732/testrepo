@@ -138,3 +138,6 @@
 - name: first-contribution
   color: "7057ff"
   description: Author's first PR to this repo
+- name: "test-sync-1788420216"
+  color: "ffffff"
+  description: "Temporary label created by run-tests.sh, safe to delete"
