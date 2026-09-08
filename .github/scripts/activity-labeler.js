@@ -17,6 +17,9 @@
 //     that anyone else engaged with this specific PR, since commit
 //     authorship can be inherited from elsewhere (rebases, cherry-picks,
 //     applied patches) and isn't reliable proof of who pushed it here.
+//     For the same reason, its committer date (not author date) is used
+//     as the event's timestamp — author date is equally inheritable and
+//     can predate when the commit actually landed on this PR.
 //   - Bots are ignored entirely (dependabot, github-actions[bot], etc.)
 //   - Draft PRs and PRs already carrying a manual outcome label
 //     (abandoned / needs-adoption / has-conflicts / wontfix) are skipped
@@ -87,13 +90,13 @@ module.exports = async ({ github, context, core }) => {
   }
   core.info(`Scanning ${prs.length} open PRs`);
 
-  for (const pr of prs) {
+  async function processOnePr(pr) {
     const pr_number = pr.number;
     const labelNames = pr.labels.map((l) => l.name);
 
     if (pr.draft) {
       core.info(`#${pr_number}: draft, skipping`);
-      continue;
+      return;
     }
     if (labelNames.some((n) => EXEMPT_LABELS.includes(n))) {
       // A manual outcome label means a human has already made the call —
@@ -110,7 +113,7 @@ module.exports = async ({ github, context, core }) => {
       } else {
         core.info(`#${pr_number}: has manual outcome label, skipping`);
       }
-      continue;
+      return;
     }
 
     // Gather every timestamped human event on the PR.
@@ -140,8 +143,18 @@ module.exports = async ({ github, context, core }) => {
       // that person never touched in the context of this PR — so this
       // event is only ever trusted below when it matches the PR's own
       // declared author (a value GitHub assigns, not git metadata).
+      //
+      // Timestamp: c.commit.author.date is ALSO preserved metadata — an
+      // old local or cherry-picked commit keeps its original author date
+      // even when pushed to this PR much later (e.g. after a maintainer's
+      // review), which would sort it as if it happened before that
+      // review and leave the clock running instead of flipping to
+      // needs-review. c.commit.committer.date is different: rebase,
+      // cherry-pick, and amend all update it to when that operation
+      // actually happened, so it tracks much closer to "when did this
+      // content land in this commit's current form" than author date does.
       const login = c.author?.login; // null if commit email isn't linked to a GH account
-      const time = c.commit?.author?.date;
+      const time = c.commit?.committer?.date;
       if (login && time) events.push({ login, time, isCommit: true });
     }
 
@@ -209,6 +222,20 @@ module.exports = async ({ github, context, core }) => {
       if (targetLabel) {
         await github.rest.issues.addLabels({ owner, repo, issue_number: pr_number, labels: [targetLabel] });
       }
+    }
+  }
+
+  for (const pr of prs) {
+    try {
+      await processOnePr(pr);
+    } catch (e) {
+      // One PR's failure (a deleted PR, a transient API error, anything)
+      // must never abort the scan for every other open PR still queued
+      // behind it. This matters most here — more than in the backfill
+      // workflow's own loop — because the nightly cron and a full manual
+      // run both scan every open PR in a single pass; without this, one
+      // bad PR would silently kill that night's entire backstop scan.
+      core.warning(`#${pr.number}: failed during activity scan, skipping (${e.message})`);
     }
   }
 };
